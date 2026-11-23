@@ -1,0 +1,581 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =====================================================
+    // Global Hardened Primitives
+    // =====================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'faiqdaffa615@gmail.com'
+      );
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidBoundedIdList(listVal, maxLen) {
+      return listVal is list
+        && listVal.size() <= maxLen
+        && (listVal.size() == 0 || (listVal[0] is string && listVal[0].size() <= 128));
+    }
+
+    function memberPath(workspaceId, uid) {
+      return /databases/$(database)/documents/workspaces/$(workspaceId)/members/$(uid);
+    }
+
+    function isWorkspaceMemberDoc(workspaceId) {
+      return exists(memberPath(workspaceId, request.auth.uid));
+    }
+
+    function workspaceRole(workspaceId) {
+      return get(memberPath(workspaceId, request.auth.uid)).data.role;
+    }
+
+    function canWriteWorkspace(workspaceId) {
+      return isWorkspaceMemberDoc(workspaceId)
+        && workspaceRole(workspaceId) in ['owner', 'admin', 'member'];
+    }
+
+    function isWorkspaceAdminOrOwner(workspaceId) {
+      return isWorkspaceMemberDoc(workspaceId)
+        && workspaceRole(workspaceId) in ['owner', 'admin'];
+    }
+
+    function isWorkspaceOwner(workspaceId) {
+      return isWorkspaceMemberDoc(workspaceId)
+        && workspaceRole(workspaceId) == 'owner';
+    }
+
+    // =====================================================
+    // Entity Validation Blueprints (Synchronized with firebase-blueprint.json)
+    // =====================================================
+    function isValidUserPrivateProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'fullName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'fullName', 'avatarUrl', 'bio', 'roleTitle', 'theme', 'createdAt', 'updatedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && isValidString(data.email, 3, 254)
+        && isValidString(data.fullName, 1, 120)
+        && (!('avatarUrl' in data) || isValidString(data.avatarUrl, 0, 512))
+        && (!('bio' in data) || isValidString(data.bio, 0, 300))
+        && (!('roleTitle' in data) || isValidString(data.roleTitle, 0, 80))
+        && (!('theme' in data) || data.theme in ['light', 'dark', 'system'])
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPublicProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'fullName', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'fullName', 'avatarUrl', 'roleTitle', 'updatedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && isValidString(data.fullName, 1, 120)
+        && (!('avatarUrl' in data) || isValidString(data.avatarUrl, 0, 512))
+        && (!('roleTitle' in data) || isValidString(data.roleTitle, 0, 80))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspace(data) {
+      return data.keys().hasAll(['name', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'description', 'avatarColor', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'])
+        && isValidString(data.name, 1, 100)
+        && (!('description' in data) || isValidString(data.description, 0, 500))
+        && (!('avatarColor' in data) || isValidString(data.avatarColor, 0, 32))
+        && isValidId(data.ownerId)
+        && isValidBoundedIdList(data.memberIds, 50)
+        && data.memberIds.size() >= 1
+        && data.ownerId in data.memberIds
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceMember(data, workspaceId, memberId) {
+      return data.keys().hasAll(['workspaceId', 'userId', 'fullName', 'role', 'memberIds', 'joinedAt'])
+        && data.keys().hasOnly(['workspaceId', 'userId', 'fullName', 'avatarUrl', 'role', 'memberIds', 'joinedAt'])
+        && data.workspaceId == workspaceId
+        && data.userId == memberId
+        && isValidId(data.workspaceId)
+        && isValidId(data.userId)
+        && isValidString(data.fullName, 1, 120)
+        && (!('avatarUrl' in data) || isValidString(data.avatarUrl, 0, 512))
+        && data.role in ['owner', 'admin', 'member', 'viewer']
+        && isValidBoundedIdList(data.memberIds, 50)
+        && data.joinedAt is timestamp;
+    }
+
+    function isValidBoard(data) {
+      return data.keys().hasAll(['workspaceId', 'title', 'background', 'visibility', 'isArchived', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['workspaceId', 'title', 'description', 'background', 'visibility', 'isArchived', 'ownerId', 'memberIds', 'labels', 'createdAt', 'updatedAt'])
+        && isValidId(data.workspaceId)
+        && isValidString(data.title, 1, 120)
+        && (!('description' in data) || isValidString(data.description, 0, 500))
+        && isValidString(data.background, 1, 120)
+        && data.visibility in ['workspace', 'private', 'public']
+        && data.isArchived is bool
+        && isValidId(data.ownerId)
+        && isValidBoundedIdList(data.memberIds, 50)
+        && (!('labels' in data) || (data.labels is list && data.labels.size() <= 20))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKanbanList(data) {
+      return data.keys().hasAll(['boardId', 'workspaceId', 'title', 'position', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['boardId', 'workspaceId', 'title', 'position', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'])
+        && isValidId(data.boardId)
+        && isValidId(data.workspaceId)
+        && isValidString(data.title, 1, 80)
+        && data.position is number && data.position >= 0 && data.position <= 1000000
+        && isValidId(data.ownerId)
+        && isValidBoundedIdList(data.memberIds, 50)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['boardId', 'workspaceId', 'listId', 'title', 'priority', 'position', 'isArchived', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'boardId', 'workspaceId', 'listId', 'title', 'description', 'priority', 'status',
+          'dueDate', 'position', 'isArchived', 'assigneeIds', 'labelIds', 'checklists',
+          'attachments', 'commentCount', 'ownerId', 'memberIds', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.boardId)
+        && isValidId(data.workspaceId)
+        && isValidId(data.listId)
+        && isValidString(data.title, 1, 200)
+        && (!('description' in data) || isValidString(data.description, 0, 5000))
+        && data.priority in ['low', 'medium', 'high', 'urgent']
+        && (!('status' in data) || isValidString(data.status, 0, 60))
+        && (!('dueDate' in data) || data.dueDate == null || isValidString(data.dueDate, 0, 40))
+        && data.position is number && data.position >= 0 && data.position <= 1000000
+        && data.isArchived is bool
+        && (!('assigneeIds' in data) || isValidBoundedIdList(data.assigneeIds, 20))
+        && (!('labelIds' in data) || isValidBoundedIdList(data.labelIds, 10))
+        && (!('checklists' in data) || (data.checklists is list && data.checklists.size() <= 10))
+        && (!('attachments' in data) || (data.attachments is list && data.attachments.size() <= 10))
+        && (!('commentCount' in data) || (data.commentCount is number && data.commentCount >= 0))
+        && isValidId(data.ownerId)
+        && isValidBoundedIdList(data.memberIds, 50)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['taskId', 'boardId', 'workspaceId', 'userId', 'authorName', 'content', 'memberIds', 'createdAt'])
+        && data.keys().hasOnly(['taskId', 'boardId', 'workspaceId', 'userId', 'authorName', 'authorAvatar', 'content', 'mentions', 'memberIds', 'createdAt'])
+        && isValidId(data.taskId)
+        && isValidId(data.boardId)
+        && isValidId(data.workspaceId)
+        && isValidId(data.userId)
+        && isValidString(data.authorName, 1, 120)
+        && (!('authorAvatar' in data) || isValidString(data.authorAvatar, 0, 512))
+        && isValidString(data.content, 1, 2000)
+        && (!('mentions' in data) || isValidBoundedIdList(data.mentions, 10))
+        && isValidBoundedIdList(data.memberIds, 50)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidActivity(data) {
+      return data.keys().hasAll(['boardId', 'workspaceId', 'userId', 'actorName', 'action', 'memberIds', 'createdAt'])
+        && data.keys().hasOnly(['boardId', 'workspaceId', 'taskId', 'userId', 'actorName', 'action', 'metadata', 'memberIds', 'createdAt'])
+        && isValidId(data.boardId)
+        && isValidId(data.workspaceId)
+        && (!('taskId' in data) || data.taskId == null || isValidString(data.taskId, 0, 128))
+        && isValidId(data.userId)
+        && isValidString(data.actorName, 1, 120)
+        && isValidString(data.action, 1, 240)
+        && (!('metadata' in data) || data.metadata is map)
+        && isValidBoundedIdList(data.memberIds, 50)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['userId', 'actorId', 'title', 'message', 'type', 'isRead', 'createdAt'])
+        && data.keys().hasOnly(['userId', 'actorId', 'title', 'message', 'type', 'isRead', 'link', 'createdAt'])
+        && isValidId(data.userId)
+        && isValidId(data.actorId)
+        && isValidString(data.title, 1, 160)
+        && isValidString(data.message, 1, 500)
+        && data.type in ['assignment', 'mention', 'deadline', 'invitation', 'member_joined', 'task_update']
+        && data.isRead is bool
+        && (!('link' in data) || isValidString(data.link, 0, 200))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidInvitation(data) {
+      return data.keys().hasAll(['workspaceId', 'workspaceName', 'inviterId', 'inviterName', 'inviteeEmail', 'role', 'status', 'createdAt'])
+        && data.keys().hasOnly(['workspaceId', 'workspaceName', 'inviterId', 'inviterName', 'inviteeEmail', 'role', 'status', 'createdAt'])
+        && isValidId(data.workspaceId)
+        && isValidString(data.workspaceName, 1, 100)
+        && isValidId(data.inviterId)
+        && isValidString(data.inviterName, 1, 120)
+        && isValidString(data.inviteeEmail, 3, 254)
+        && data.role in ['admin', 'member', 'viewer']
+        && data.status in ['pending', 'accepted', 'declined']
+        && data.createdAt is timestamp;
+    }
+
+    // =====================================================
+    // Collection Rules
+    // =====================================================
+
+    // 1. Private User Profiles (PII Isolated)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if false;
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPrivateProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPrivateProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'avatarUrl', 'bio', 'roleTitle', 'theme', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // 2. Public Profiles (Non-PII)
+    match /publicProfiles/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidPublicProfile(incoming(), userId)
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidPublicProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['fullName', 'avatarUrl', 'roleTitle', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // 3. Workspaces & Members
+    match /workspaces/{workspaceId} {
+      allow get: if isSignedIn()
+        && isValidId(workspaceId)
+        && (request.auth.uid in existing().memberIds || isAdmin());
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isValidWorkspace(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().memberIds.size() == 1
+        && incoming().memberIds[0] == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isValidWorkspace(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isWorkspaceAdminOrOwner(workspaceId) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'avatarColor', 'memberIds', 'updatedAt']))
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && (isWorkspaceOwner(workspaceId) || isAdmin());
+
+      match /members/{memberId} {
+        allow get: if isSignedIn()
+          && isValidId(workspaceId)
+          && isValidId(memberId)
+          && (isWorkspaceMemberDoc(workspaceId) || isAdmin());
+        allow list: if isSignedIn()
+          && request.auth.uid in resource.data.memberIds;
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(memberId)
+          && isValidWorkspaceMember(incoming(), workspaceId, memberId)
+          && incoming().joinedAt == request.time
+          && (
+            (memberId == request.auth.uid
+              && incoming().role == 'owner'
+              && existsAfter(/databases/$(database)/documents/workspaces/$(workspaceId))
+              && getAfter(/databases/$(database)/documents/workspaces/$(workspaceId)).data.ownerId == request.auth.uid) ||
+            (isWorkspaceAdminOrOwner(workspaceId) && incoming().role in ['admin', 'member', 'viewer'])
+          );
+        allow update: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(memberId)
+          && isValidWorkspaceMember(incoming(), workspaceId, memberId)
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().userId == existing().userId
+          && incoming().joinedAt == existing().joinedAt
+          && (
+            isAdmin() ||
+            (isWorkspaceAdminOrOwner(workspaceId)
+              && existing().role != 'owner'
+              && incoming().role in ['admin', 'member', 'viewer']
+              && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'fullName', 'avatarUrl', 'memberIds']))
+          );
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(memberId)
+          && (
+            isAdmin() ||
+            (isWorkspaceAdminOrOwner(workspaceId) && existing().role != 'owner') ||
+            (memberId == request.auth.uid && existing().role != 'owner')
+          );
+      }
+    }
+
+    // 4. Boards
+    match /boards/{boardId} {
+      allow get: if isSignedIn()
+        && isValidId(boardId)
+        && (request.auth.uid in existing().memberIds || existing().visibility == 'public' || isAdmin());
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if isVerifiedUser()
+        && isValidId(boardId)
+        && isValidBoard(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/workspaces/$(incoming().workspaceId))
+        && canWriteWorkspace(incoming().workspaceId);
+      allow update: if isVerifiedUser()
+        && isValidId(boardId)
+        && isValidBoard(incoming())
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (canWriteWorkspace(existing().workspaceId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'background', 'visibility', 'isArchived', 'memberIds', 'labels', 'updatedAt']))
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(boardId)
+        && (isWorkspaceAdminOrOwner(existing().workspaceId) || existing().ownerId == request.auth.uid || isAdmin());
+    }
+
+    // 5. Kanban Lists
+    match /lists/{listId} {
+      allow get: if isSignedIn()
+        && isValidId(listId)
+        && (request.auth.uid in existing().memberIds || isAdmin());
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if isVerifiedUser()
+        && isValidId(listId)
+        && isValidKanbanList(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/boards/$(incoming().boardId))
+        && canWriteWorkspace(incoming().workspaceId);
+      allow update: if isVerifiedUser()
+        && isValidId(listId)
+        && isValidKanbanList(incoming())
+        && incoming().boardId == existing().boardId
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (canWriteWorkspace(existing().workspaceId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'position', 'memberIds', 'updatedAt']))
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(listId)
+        && (canWriteWorkspace(existing().workspaceId) || isAdmin());
+    }
+
+    // 6. Tasks
+    match /tasks/{taskId} {
+      allow get: if isSignedIn()
+        && isValidId(taskId)
+        && (request.auth.uid in existing().memberIds || isAdmin());
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if isVerifiedUser()
+        && isValidId(taskId)
+        && isValidTask(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/boards/$(incoming().boardId))
+        && exists(/databases/$(database)/documents/lists/$(incoming().listId))
+        && canWriteWorkspace(incoming().workspaceId);
+      allow update: if isVerifiedUser()
+        && isValidId(taskId)
+        && isValidTask(incoming())
+        && incoming().boardId == existing().boardId
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          // Action: Drag-and-drop Move / Reorder
+          (canWriteWorkspace(existing().workspaceId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['listId', 'position', 'status', 'updatedAt'])) ||
+          // Action: Edit Task Details
+          (canWriteWorkspace(existing().workspaceId)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'priority', 'status', 'dueDate', 'listId', 'position', 'isArchived',
+              'assigneeIds', 'labelIds', 'checklists', 'attachments', 'commentCount', 'memberIds', 'updatedAt'
+            ]))
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(taskId)
+        && (canWriteWorkspace(existing().workspaceId) || isAdmin());
+    }
+
+    // 7. Comments
+    match /comments/{commentId} {
+      allow get: if isSignedIn()
+        && isValidId(commentId)
+        && (request.auth.uid in existing().memberIds || isAdmin());
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if isVerifiedUser()
+        && isValidId(commentId)
+        && isValidComment(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/tasks/$(incoming().taskId))
+        && canWriteWorkspace(incoming().workspaceId);
+      allow update: if false;
+      allow delete: if isVerifiedUser()
+        && isValidId(commentId)
+        && (existing().userId == request.auth.uid || isWorkspaceAdminOrOwner(existing().workspaceId) || isAdmin());
+    }
+
+    // 8. Activities
+    match /activities/{activityId} {
+      allow get: if isSignedIn()
+        && isValidId(activityId)
+        && (request.auth.uid in existing().memberIds || isAdmin());
+      allow list: if isSignedIn()
+        && request.auth.uid in resource.data.memberIds;
+      allow create: if isVerifiedUser()
+        && isValidId(activityId)
+        && isValidActivity(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/boards/$(incoming().boardId))
+        && canWriteWorkspace(incoming().workspaceId);
+      allow update, delete: if false;
+    }
+
+    // 9. Notifications
+    match /notifications/{notificationId} {
+      allow get: if isSignedIn()
+        && isValidId(notificationId)
+        && (existing().userId == request.auth.uid || isAdmin());
+      allow list: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+      allow create: if isVerifiedUser()
+        && isValidId(notificationId)
+        && isValidNotification(incoming())
+        && incoming().actorId == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(notificationId)
+        && isValidNotification(incoming())
+        && existing().userId == request.auth.uid
+        && incoming().userId == existing().userId
+        && incoming().actorId == existing().actorId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
+      allow delete: if isVerifiedUser()
+        && isValidId(notificationId)
+        && (existing().userId == request.auth.uid || isAdmin());
+    }
+
+    // 10. Invitations (Terminal State Locked once accepted/declined)
+    match /invitations/{invitationId} {
+      allow get: if isVerifiedUser()
+        && isValidId(invitationId)
+        && (
+          existing().inviterId == request.auth.uid ||
+          existing().inviteeEmail == request.auth.token.email ||
+          isAdmin()
+        );
+      allow list: if isVerifiedUser()
+        && (
+          resource.data.inviterId == request.auth.uid ||
+          resource.data.inviteeEmail == request.auth.token.email
+        );
+      allow create: if isVerifiedUser()
+        && isValidId(invitationId)
+        && isValidInvitation(incoming())
+        && incoming().inviterId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/workspaces/$(incoming().workspaceId))
+        && isWorkspaceAdminOrOwner(incoming().workspaceId);
+      allow update: if isVerifiedUser()
+        && isValidId(invitationId)
+        && isValidInvitation(incoming())
+        && existing().status == 'pending'
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().inviterId == existing().inviterId
+        && incoming().inviteeEmail == existing().inviteeEmail
+        && incoming().createdAt == existing().createdAt
+        && (
+          isAdmin() ||
+          (existing().inviteeEmail == request.auth.token.email
+            && incoming().status in ['accepted', 'declined']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status']))
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(invitationId)
+        && (isWorkspaceAdminOrOwner(existing().workspaceId) || isAdmin());
+    }
+
+    // 11. Admins Registry (Read own status only; immutable from client)
+    match /admins/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && isOwner(userId);
+      allow list, create, update, delete: if false;
+    }
+  }
+}

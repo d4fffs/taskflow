@@ -1,0 +1,239 @@
+{
+  "entities": {
+    "UserPrivateProfile": {
+      "title": "UserPrivateProfile",
+      "description": "Private user account profile containing PII (email) strictly isolated to the account owner.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "avatarUrl": { "type": "string", "maxLength": 512 },
+        "bio": { "type": "string", "maxLength": 300 },
+        "roleTitle": { "type": "string", "maxLength": 80 },
+        "theme": { "type": "string", "enum": ["light", "dark", "system"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "fullName", "createdAt", "updatedAt"]
+    },
+    "PublicProfile": {
+      "title": "PublicProfile",
+      "description": "Non-PII public profile visible to collaborators.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "avatarUrl": { "type": "string", "maxLength": 512 },
+        "roleTitle": { "type": "string", "maxLength": 80 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "fullName", "updatedAt"]
+    },
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Collaborative workspace containing boards and members.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 500 },
+        "avatarColor": { "type": "string", "maxLength": 32 },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberIds": { "type": "array", "description": "Bounded list of workspace member UIDs (max 50)." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "ownerId", "memberIds", "createdAt", "updatedAt"]
+    },
+    "WorkspaceMember": {
+      "title": "WorkspaceMember",
+      "description": "Authoritative RBAC membership entry inside a workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "avatarUrl": { "type": "string", "maxLength": 512 },
+        "role": { "type": "string", "enum": ["owner", "admin", "member", "viewer"] },
+        "memberIds": { "type": "array", "description": "Bounded list of workspace member UIDs (max 50) for list query scoping." },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "userId", "fullName", "role", "memberIds", "joinedAt"]
+    },
+    "Board": {
+      "title": "Board",
+      "description": "Kanban board belonging to a workspace.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "background": { "type": "string", "maxLength": 120 },
+        "visibility": { "type": "string", "enum": ["workspace", "private", "public"] },
+        "isArchived": { "type": "boolean" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberIds": { "type": "array", "description": "Bounded list of board member UIDs (max 50)." },
+        "labels": { "type": "array", "description": "Bounded list of board labels (max 20)." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "title", "background", "visibility", "isArchived", "ownerId", "memberIds", "createdAt", "updatedAt"]
+    },
+    "KanbanList": {
+      "title": "KanbanList",
+      "description": "Ordered column inside a Kanban board.",
+      "type": "object",
+      "properties": {
+        "boardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "position": { "type": "number" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberIds": { "type": "array", "description": "Bounded list of member UIDs (max 50)." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["boardId", "workspaceId", "title", "position", "ownerId", "memberIds", "createdAt", "updatedAt"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Kanban task card with priority, deadline, assignees, labels, checklists, and attachments.",
+      "type": "object",
+      "properties": {
+        "boardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "listId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 5000 },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "status": { "type": "string", "maxLength": 60 },
+        "dueDate": { "type": "string", "maxLength": 40 },
+        "position": { "type": "number" },
+        "isArchived": { "type": "boolean" },
+        "assigneeIds": { "type": "array", "description": "Bounded list of assignee UIDs (max 20)." },
+        "labelIds": { "type": "array", "description": "Bounded list of label IDs (max 10)." },
+        "checklists": { "type": "array", "description": "Bounded checklists array (max 10)." },
+        "attachments": { "type": "array", "description": "Bounded attachments array (max 10)." },
+        "commentCount": { "type": "number" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberIds": { "type": "array", "description": "Bounded list of workspace member UIDs (max 50)." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["boardId", "workspaceId", "listId", "title", "priority", "position", "isArchived", "ownerId", "memberIds", "createdAt", "updatedAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Discussion comment on a task card.",
+      "type": "object",
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "boardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "authorAvatar": { "type": "string", "maxLength": 512 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "mentions": { "type": "array", "description": "Bounded list of mentioned usernames/UIDs (max 10)." },
+        "memberIds": { "type": "array", "description": "Bounded list of workspace member UIDs (max 50)." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["taskId", "boardId", "workspaceId", "userId", "authorName", "content", "memberIds", "createdAt"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "Audit trail of workspace and board actions.",
+      "type": "object",
+      "properties": {
+        "boardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "taskId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "action": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "metadata": { "type": "object" },
+        "memberIds": { "type": "array", "description": "Bounded list of workspace member UIDs (max 50)." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["boardId", "workspaceId", "userId", "actorName", "action", "memberIds", "createdAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User-scoped in-app notification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "type": { "type": "string", "enum": ["assignment", "mention", "deadline", "invitation", "member_joined", "task_update"] },
+        "isRead": { "type": "boolean" },
+        "link": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "actorId", "title", "message", "type", "isRead", "createdAt"]
+    },
+    "Invitation": {
+      "title": "Invitation",
+      "description": "Email-based workspace invitation.",
+      "type": "object",
+      "properties": {
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workspaceName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "inviterId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "inviterName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "inviteeEmail": { "type": "string", "format": "email", "maxLength": 254 },
+        "role": { "type": "string", "enum": ["admin", "member", "viewer"] },
+        "status": { "type": "string", "enum": ["pending", "accepted", "declined"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["workspaceId", "workspaceName", "inviterId", "inviterName", "inviteeEmail", "role", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPrivateProfile" },
+      "description": "Owner-isolated private user profiles (email and personal preferences)."
+    },
+    "/publicProfiles/{userId}": {
+      "schema": { "$ref": "#/entities/PublicProfile" },
+      "description": "Non-PII public profile metadata for workspace collaborators."
+    },
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/Workspace" },
+      "description": "Collaborative workspaces owned and shared by users."
+    },
+    "/workspaces/{workspaceId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/WorkspaceMember" },
+      "description": "Authoritative workspace RBAC membership records."
+    },
+    "/boards/{boardId}": {
+      "schema": { "$ref": "#/entities/Board" },
+      "description": "Kanban boards within workspaces."
+    },
+    "/lists/{listId}": {
+      "schema": { "$ref": "#/entities/KanbanList" },
+      "description": "Ordered Kanban columns belonging to a board."
+    },
+    "/tasks/{taskId}": {
+      "schema": { "$ref": "#/entities/Task" },
+      "description": "Kanban task cards with priorities, deadlines, labels, checklists, and attachments."
+    },
+    "/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/Comment" },
+      "description": "Task discussion comments."
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/Activity" },
+      "description": "Activity history entries for boards and tasks."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "User-scoped in-app notifications."
+    },
+    "/invitations/{invitationId}": {
+      "schema": { "$ref": "#/entities/Invitation" },
+      "description": "Pending and resolved workspace invitations."
+    }
+  }
+}

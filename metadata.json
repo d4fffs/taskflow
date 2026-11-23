@@ -1,0 +1,8 @@
+{
+  "name": "TaskFlow",
+  "description": "Collaborative Kanban project management platform with workspaces, boards, drag-and-drop workflows, real-time sync, analytics, and calendar scheduling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
