@@ -1,16 +1,13 @@
 import React, { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, CheckCircle2, Mail, Lock, User as UserIcon, Eye } from 'lucide-react';
+import { CheckCircle2, Eye } from 'lucide-react';
 import {
-  loginWithGoogle,
-  loginWithEmail,
-  registerWithEmail,
-  sendResetPassword,
+  loginWithGoogleSupabase,
   formatAuthError,
 } from '../../services/auth/authService';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { useToastStore } from '../../stores/useToastStore';
-import { validateEmail } from '../../utils/kanban';
+import { GoogleIcon } from '../../components/common/BrandIcons';
 
 interface AuthShellProps {
   title: string;
@@ -83,12 +80,9 @@ function AuthShell({ title, subtitle, children }: AuthShellProps) {
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const { setSession, enterGuestMode } = useAuthStore();
+  const { enterGuestMode } = useAuthStore();
   const addToast = useToastStore((s) => s.addToast);
 
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [serverError, setServerError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -96,41 +90,11 @@ export function LoginPage() {
     setServerError('');
     setLoading(true);
     try {
-      const { user, profile } = await loginWithGoogle();
-      setSession(user, profile);
-      addToast({
-        title: 'Signed in',
-        message: `Welcome back, ${profile?.fullName || user.displayName || 'there'}.`,
-        variant: 'success',
-      });
-      navigate('/dashboard');
+      await loginWithGoogleSupabase();
+      // Browser will redirect to Google → Supabase callback → /dashboard
+      // No need to navigate here; the redirect handles it
     } catch (err) {
       setServerError(formatAuthError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const nextErrors: Record<string, string> = {};
-    if (!email.trim()) nextErrors.email = 'Email address is required.';
-    else if (!validateEmail(email)) nextErrors.email = 'Please enter a valid email address.';
-    if (!password) nextErrors.password = 'Password is required.';
-    if (Object.keys(nextErrors).length) {
-      setErrors(nextErrors);
-      return;
-    }
-
-    setServerError('');
-    setLoading(true);
-    try {
-      const { user, profile } = await loginWithEmail(email, password);
-      setSession(user, profile);
-      navigate('/dashboard');
-    } catch (err) {
-      setServerError(formatAuthError(err));
-    } finally {
       setLoading(false);
     }
   };
@@ -155,10 +119,10 @@ export function LoginPage() {
           type="button"
           onClick={() => void handleGoogleLogin()}
           disabled={loading}
-          className="w-full flex items-center justify-center gap-2.5 px-4 py-2.5 rounded-lg bg-[#635BFF] hover:bg-[#5249E8] text-white text-sm font-medium transition-colors disabled:opacity-60"
+          className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-lg border border-[#E6E8F0] dark:border-[#262A3D] bg-white dark:bg-[#151722] hover:bg-[#F7F8FC] dark:hover:bg-[#1C1F2E] text-[#20212B] dark:text-[#F4F5FA] text-sm font-medium transition-colors shadow-sm disabled:opacity-60"
         >
-          <span>Continue with Google</span>
-          <ArrowRight className="w-4 h-4" />
+          <GoogleIcon className="w-5 h-5 shrink-0" />
+          <span>{loading ? 'Redirecting to Google...' : 'Continue with Google'}</span>
         </button>
 
         <button
@@ -170,12 +134,6 @@ export function LoginPage() {
           <span>Explore Interactive Preview</span>
         </button>
 
-        <div className="relative flex items-center py-2">
-          <div className="flex-grow border-t border-[#E6E8F0] dark:border-[#262A3D]" />
-          <span className="shrink mx-3 text-xs text-[#9295A5]">or sign in with email</span>
-          <div className="flex-grow border-t border-[#E6E8F0] dark:border-[#262A3D]" />
-        </div>
-
         {serverError && (
           <div
             role="alert"
@@ -184,72 +142,6 @@ export function LoginPage() {
             {serverError}
           </div>
         )}
-
-        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-          <div>
-            <label
-              htmlFor="login-email"
-              className="block text-xs font-medium text-[#20212B] dark:text-[#F4F5FA] mb-1.5"
-            >
-              Email Address
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-[#9295A5] absolute left-3.5 top-3" />
-              <input
-                id="login-email"
-                type="email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  if (errors.email) setErrors((p) => ({ ...p, email: undefined }));
-                }}
-                placeholder="you@company.com"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-lg bg-[#F7F8FC] dark:bg-[#0D0E14] border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] focus:outline-none focus:ring-2 focus:ring-[#635BFF]"
-              />
-            </div>
-            {errors.email && <p className="text-xs text-[#EF4444] mt-1">{errors.email}</p>}
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label
-                htmlFor="login-password"
-                className="block text-xs font-medium text-[#20212B] dark:text-[#F4F5FA]"
-              >
-                Password
-              </label>
-              <Link
-                to="/forgot-password"
-                className="text-xs font-medium text-[#635BFF] hover:underline"
-              >
-                Forgot password?
-              </Link>
-            </div>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-[#9295A5] absolute left-3.5 top-3" />
-              <input
-                id="login-password"
-                type="password"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (errors.password) setErrors((p) => ({ ...p, password: undefined }));
-                }}
-                placeholder="Enter your password"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-lg bg-[#F7F8FC] dark:bg-[#0D0E14] border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] focus:outline-none focus:ring-2 focus:ring-[#635BFF]"
-              />
-            </div>
-            {errors.password && <p className="text-xs text-[#EF4444] mt-1">{errors.password}</p>}
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-4 py-2.5 rounded-lg bg-[#20212B] dark:bg-[#262A3D] hover:bg-[#2E3040] text-white text-sm font-medium transition-colors disabled:opacity-60"
-          >
-            {loading ? 'Signing in...' : 'Sign In'}
-          </button>
-        </form>
 
         <p className="text-center text-xs text-[#6B7085] dark:text-[#9EA3B8] pt-2">
           New to TaskFlow?{' '}
@@ -264,13 +156,9 @@ export function LoginPage() {
 
 export function RegisterPage() {
   const navigate = useNavigate();
-  const { setSession } = useAuthStore();
+  const { enterGuestMode } = useAuthStore();
   const addToast = useToastStore((s) => s.addToast);
 
-  const [fullName, setFullName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [errors, setErrors] = useState<Record<string, string | undefined>>({});
   const [serverError, setServerError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -278,46 +166,22 @@ export function RegisterPage() {
     setServerError('');
     setLoading(true);
     try {
-      const { user, profile } = await loginWithGoogle();
-      setSession(user, profile);
-      navigate('/dashboard');
+      await loginWithGoogleSupabase();
+      // Browser will redirect to Google → Supabase callback → /dashboard
     } catch (err) {
       setServerError(formatAuthError(err));
-    } finally {
       setLoading(false);
     }
   };
 
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const nextErrors: Record<string, string> = {};
-    if (!fullName.trim()) nextErrors.fullName = 'Full name is required.';
-    if (!email.trim()) nextErrors.email = 'Email address is required.';
-    else if (!validateEmail(email)) nextErrors.email = 'Please enter a valid email address.';
-    if (!password || password.length < 6) {
-      nextErrors.password = 'Password must be at least 6 characters.';
-    }
-    if (Object.keys(nextErrors).length) {
-      setErrors(nextErrors);
-      return;
-    }
-
-    setServerError('');
-    setLoading(true);
-    try {
-      const { user, profile } = await registerWithEmail({ fullName, email, password });
-      setSession(user, profile);
-      addToast({
-        title: 'Account created',
-        message: 'Check your inbox to verify your email address for cloud sync.',
-        variant: 'success',
-      });
-      navigate('/dashboard');
-    } catch (err) {
-      setServerError(formatAuthError(err));
-    } finally {
-      setLoading(false);
-    }
+  const handlePreview = () => {
+    enterGuestMode();
+    addToast({
+      title: 'Interactive Preview Active',
+      message: 'Explore workspaces, drag-and-drop boards, analytics, and calendar.',
+      variant: 'info',
+    });
+    navigate('/dashboard');
   };
 
   return (
@@ -330,17 +194,20 @@ export function RegisterPage() {
           type="button"
           onClick={() => void handleGoogleSignUp()}
           disabled={loading}
-          className="w-full flex items-center justify-center gap-2.5 px-4 py-2.5 rounded-lg bg-[#635BFF] hover:bg-[#5249E8] text-white text-sm font-medium transition-colors disabled:opacity-60"
+          className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-lg border border-[#E6E8F0] dark:border-[#262A3D] bg-white dark:bg-[#151722] hover:bg-[#F7F8FC] dark:hover:bg-[#1C1F2E] text-[#20212B] dark:text-[#F4F5FA] text-sm font-medium transition-colors shadow-sm disabled:opacity-60"
         >
-          <span>Sign up with Google</span>
-          <ArrowRight className="w-4 h-4" />
+          <GoogleIcon className="w-5 h-5 shrink-0" />
+          <span>{loading ? 'Redirecting to Google...' : 'Sign up with Google'}</span>
         </button>
 
-        <div className="relative flex items-center py-2">
-          <div className="flex-grow border-t border-[#E6E8F0] dark:border-[#262A3D]" />
-          <span className="shrink mx-3 text-xs text-[#9295A5]">or register with email</span>
-          <div className="flex-grow border-t border-[#E6E8F0] dark:border-[#262A3D]" />
-        </div>
+        <button
+          type="button"
+          onClick={handlePreview}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] hover:bg-[#F7F8FC] dark:hover:bg-[#1C1F2E] text-sm font-medium transition-colors"
+        >
+          <Eye className="w-4 h-4 text-[#635BFF]" />
+          <span>Explore Interactive Preview</span>
+        </button>
 
         {serverError && (
           <div
@@ -350,88 +217,6 @@ export function RegisterPage() {
             {serverError}
           </div>
         )}
-
-        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-          <div>
-            <label
-              htmlFor="reg-name"
-              className="block text-xs font-medium text-[#20212B] dark:text-[#F4F5FA] mb-1.5"
-            >
-              Full Name
-            </label>
-            <div className="relative">
-              <UserIcon className="w-4 h-4 text-[#9295A5] absolute left-3.5 top-3" />
-              <input
-                id="reg-name"
-                type="text"
-                value={fullName}
-                onChange={(e) => {
-                  setFullName(e.target.value);
-                  if (errors.fullName) setErrors((p) => ({ ...p, fullName: undefined }));
-                }}
-                placeholder="Nadia Kusuma"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-lg bg-[#F7F8FC] dark:bg-[#0D0E14] border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] focus:outline-none focus:ring-2 focus:ring-[#635BFF]"
-              />
-            </div>
-            {errors.fullName && <p className="text-xs text-[#EF4444] mt-1">{errors.fullName}</p>}
-          </div>
-
-          <div>
-            <label
-              htmlFor="reg-email"
-              className="block text-xs font-medium text-[#20212B] dark:text-[#F4F5FA] mb-1.5"
-            >
-              Email Address
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-[#9295A5] absolute left-3.5 top-3" />
-              <input
-                id="reg-email"
-                type="email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  if (errors.email) setErrors((p) => ({ ...p, email: undefined }));
-                }}
-                placeholder="you@company.com"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-lg bg-[#F7F8FC] dark:bg-[#0D0E14] border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] focus:outline-none focus:ring-2 focus:ring-[#635BFF]"
-              />
-            </div>
-            {errors.email && <p className="text-xs text-[#EF4444] mt-1">{errors.email}</p>}
-          </div>
-
-          <div>
-            <label
-              htmlFor="reg-password"
-              className="block text-xs font-medium text-[#20212B] dark:text-[#F4F5FA] mb-1.5"
-            >
-              Password
-            </label>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-[#9295A5] absolute left-3.5 top-3" />
-              <input
-                id="reg-password"
-                type="password"
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (errors.password) setErrors((p) => ({ ...p, password: undefined }));
-                }}
-                placeholder="Minimum 6 characters"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-lg bg-[#F7F8FC] dark:bg-[#0D0E14] border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] focus:outline-none focus:ring-2 focus:ring-[#635BFF]"
-              />
-            </div>
-            {errors.password && <p className="text-xs text-[#EF4444] mt-1">{errors.password}</p>}
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-4 py-2.5 rounded-lg bg-[#20212B] dark:bg-[#262A3D] hover:bg-[#2E3040] text-white text-sm font-medium transition-colors disabled:opacity-60"
-          >
-            {loading ? 'Creating account...' : 'Create Account'}
-          </button>
-        </form>
 
         <p className="text-center text-xs text-[#6B7085] dark:text-[#9EA3B8] pt-2">
           Already have an account?{' '}
@@ -445,97 +230,23 @@ export function RegisterPage() {
 }
 
 export function ForgotPasswordPage() {
-  const [email, setEmail] = useState('');
-  const [error, setError] = useState('');
-  const [sent, setSent] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    if (!email.trim() || !validateEmail(email)) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-    setError('');
-    setLoading(true);
-    try {
-      await sendResetPassword(email);
-      setSent(true);
-    } catch (err) {
-      setError(formatAuthError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <AuthShell
-      title="Reset your password"
-      subtitle="Enter your email address and we will send you a password reset link."
+      title="Need help signing in?"
+      subtitle="TaskFlow uses Google Sign-In. Try signing in again with your Google account."
     >
-      {sent ? (
-        <div className="space-y-4">
-          <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-sm text-emerald-800 dark:text-emerald-300">
-            Password reset instructions were sent to <strong>{email}</strong>. Check your inbox and
-            spam folder.
-          </div>
-          <Link
-            to="/login"
-            className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-lg bg-[#635BFF] hover:bg-[#5249E8] text-white text-sm font-medium transition-colors"
-          >
-            Back to Sign In
-          </Link>
-        </div>
-      ) : (
-        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-          {error && (
-            <div
-              role="alert"
-              className="p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-700 dark:text-red-300"
-            >
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label
-              htmlFor="reset-email"
-              className="block text-xs font-medium text-[#20212B] dark:text-[#F4F5FA] mb-1.5"
-            >
-              Email Address
-            </label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-[#9295A5] absolute left-3.5 top-3" />
-              <input
-                id="reset-email"
-                type="email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  if (error) setError('');
-                }}
-                placeholder="you@company.com"
-                className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-lg bg-[#F7F8FC] dark:bg-[#0D0E14] border border-[#E6E8F0] dark:border-[#262A3D] text-[#20212B] dark:text-[#F4F5FA] focus:outline-none focus:ring-2 focus:ring-[#635BFF]"
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-4 py-2.5 rounded-lg bg-[#635BFF] hover:bg-[#5249E8] text-white text-sm font-medium transition-colors disabled:opacity-60"
-          >
-            {loading ? 'Sending reset link...' : 'Send Reset Link'}
-          </button>
-
-          <p className="text-center text-xs text-[#6B7085] dark:text-[#9EA3B8] pt-2">
-            Remembered your password?{' '}
-            <Link to="/login" className="text-[#635BFF] font-medium hover:underline">
-              Back to Sign In
-            </Link>
-          </p>
-        </form>
-      )}
+      <div className="space-y-4">
+        <p className="text-sm text-[#6B7085] dark:text-[#9EA3B8]">
+          Since TaskFlow uses Google for authentication, you don't need a separate password. Just
+          click "Continue with Google" on the sign-in page to access your account.
+        </p>
+        <Link
+          to="/login"
+          className="inline-flex items-center justify-center w-full px-4 py-2.5 rounded-lg bg-[#635BFF] hover:bg-[#5249E8] text-white text-sm font-medium transition-colors"
+        >
+          Back to Sign In
+        </Link>
+      </div>
     </AuthShell>
   );
 }

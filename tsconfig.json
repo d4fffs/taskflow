@@ -19,6 +19,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "react-router": [
+        "./node_modules/react-router/dist/development/index.d.ts"
+      ],
+      "react-router-dom": [
+        "./node_modules/react-router-dom/dist/index.d.ts"
       ]
     },
     "allowImportingTsExtensions": true,

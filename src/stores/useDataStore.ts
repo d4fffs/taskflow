@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Unsubscribe } from 'firebase/firestore';
+import { supabase, isSupabaseConfigured } from '../services/supabase/client';
 import { createGuestSeedState } from '../services/sandbox/guestSeed';
 import {
   subscribeUserWorkspaces,
@@ -100,6 +101,7 @@ export interface DataState {
   setActiveWorkspaceId: (id: string | null) => void;
   resetData: () => void;
   startSync: () => void;
+  syncFromSupabase: () => Promise<void>;
   getWorkspaceRole: (workspaceId: string | null | undefined) => WorkspaceRole;
   canWriteWorkspace: (workspaceId: string | null | undefined) => boolean;
 
@@ -205,7 +207,7 @@ export const useDataStore = create<DataState>((set, get) => ({
 
   startSync: () => {
     clearAllSubscriptions();
-    const { user, profile, isGuestMode } = useAuthStore.getState();
+    const { user, profile, isGuestMode, authProvider } = useAuthStore.getState();
 
     if (!user) {
       get().resetData();
@@ -228,6 +230,11 @@ export const useDataStore = create<DataState>((set, get) => ({
         notifications: seed.notifications,
         invitations: seed.invitations,
       });
+      return;
+    }
+
+    if (authProvider === 'supabase') {
+      void get().syncFromSupabase();
       return;
     }
 
@@ -311,6 +318,230 @@ export const useDataStore = create<DataState>((set, get) => ({
       unsubNotifications,
       unsubInvitations,
     ];
+  },
+
+  syncFromSupabase: async () => {
+    const { user, profile } = useAuthStore.getState();
+    if (!user || !supabase || !isSupabaseConfigured()) {
+      set({ loading: false });
+      return;
+    }
+    set({ loading: true, error: null });
+    const uid = user.uid;
+
+    try {
+      // 1. Fetch workspaces owned or joined by user
+      const { data: memberRows } = await supabase
+        .from('workspace_members')
+        .select('workspace_id, role, joined_at')
+        .eq('user_id', uid);
+
+      const wsIds: string[] = (memberRows || []).map((m: { workspace_id: string }) => m.workspace_id);
+
+      const { data: ownedWs } = await supabase
+        .from('workspaces')
+        .select('*')
+        .eq('owner_id', uid);
+
+      if (ownedWs) {
+        ownedWs.forEach((w: { id: string }) => {
+          if (!wsIds.includes(w.id)) wsIds.push(w.id);
+        });
+      }
+
+      let loadedWorkspaces: Workspace[] = [];
+
+      if (wsIds.length > 0) {
+        const { data: wsData } = await supabase
+          .from('workspaces')
+          .select('*')
+          .in('id', wsIds);
+
+        if (wsData && wsData.length > 0) {
+          loadedWorkspaces = wsData.map((w: Record<string, any>) => ({
+            id: w.id,
+            name: w.name,
+            description: w.description || '',
+            avatarColor: w.avatar_color || '#635BFF',
+            ownerId: w.owner_id,
+            memberIds: [uid],
+            createdAt: w.created_at,
+            updatedAt: w.updated_at,
+          }));
+        }
+      }
+
+      // If user has no workspaces yet, bootstrap a starter workspace in Supabase
+      if (loadedWorkspaces.length === 0) {
+        const wsName = `${profile?.fullName?.split(' ')[0] || 'My'} Workspace`;
+        const { data: newWs, error: newWsErr } = await supabase
+          .from('workspaces')
+          .insert({
+            name: wsName,
+            description: 'Primary collaborative workspace for projects and sprints.',
+            avatar_color: '#635BFF',
+            owner_id: uid,
+          })
+          .select()
+          .single();
+
+        if (newWs && !newWsErr) {
+          await supabase.from('workspace_members').insert({
+            workspace_id: newWs.id,
+            user_id: uid,
+            role: 'owner',
+          });
+
+          loadedWorkspaces = [
+            {
+              id: newWs.id,
+              name: newWs.name,
+              description: newWs.description || '',
+              avatarColor: newWs.avatar_color || '#635BFF',
+              ownerId: newWs.owner_id,
+              memberIds: [uid],
+              createdAt: newWs.created_at,
+              updatedAt: newWs.updated_at,
+            },
+          ];
+
+          // Create starter board
+          const { data: newBoard } = await supabase
+            .from('boards')
+            .insert({
+              workspace_id: newWs.id,
+              title: 'Getting Started Board',
+              description: 'Organize tasks, drag cards across lanes, and track deadlines.',
+              background: 'indigo',
+              visibility: 'workspace',
+              created_by: uid,
+              labels: DEFAULT_BOARD_LABELS,
+            })
+            .select()
+            .single();
+
+          if (newBoard) {
+            await supabase.from('lists').insert([
+              { board_id: newBoard.id, title: 'To Do', position: 1000 },
+              { board_id: newBoard.id, title: 'In Progress', position: 2000 },
+              { board_id: newBoard.id, title: 'Done', position: 3000 },
+            ]);
+          }
+        }
+      }
+
+      const activeWsId = loadedWorkspaces[0]?.id || null;
+      let boards: Board[] = [];
+      let lists: KanbanList[] = [];
+      let tasks: Task[] = [];
+
+      if (loadedWorkspaces.length > 0) {
+        const allWsIds = loadedWorkspaces.map((w) => w.id);
+        const { data: bData } = await supabase
+          .from('boards')
+          .select('*')
+          .in('workspace_id', allWsIds);
+
+        if (bData) {
+          boards = bData.map((b: Record<string, any>) => ({
+            id: b.id,
+            workspaceId: b.workspace_id,
+            title: b.title,
+            description: b.description || '',
+            background: b.background || 'indigo',
+            visibility: b.visibility || 'workspace',
+            isArchived: b.is_archived || false,
+            ownerId: b.created_by || uid,
+            memberIds: [uid],
+            labels: b.labels || DEFAULT_BOARD_LABELS,
+            createdAt: b.created_at,
+            updatedAt: b.updated_at,
+          }));
+        }
+
+        const boardWorkspaceMap = new Map<string, string>();
+        boards.forEach((b) => boardWorkspaceMap.set(b.id, b.workspaceId));
+
+        const boardIds = boards.map((b) => b.id);
+        if (boardIds.length > 0) {
+          const { data: lData } = await supabase
+            .from('lists')
+            .select('*')
+            .in('board_id', boardIds)
+            .order('position', { ascending: true });
+
+          if (lData) {
+            lists = lData.map((l: Record<string, any>) => ({
+              id: l.id,
+              boardId: l.board_id,
+              workspaceId: boardWorkspaceMap.get(l.board_id) || '',
+              title: l.title,
+              position: l.position,
+              ownerId: uid,
+              memberIds: [uid],
+              createdAt: l.created_at,
+              updatedAt: l.updated_at,
+            }));
+          }
+
+          const { data: tData } = await supabase
+            .from('tasks')
+            .select('*')
+            .in('board_id', boardIds)
+            .order('position', { ascending: true });
+
+          if (tData) {
+            tasks = tData.map((t: Record<string, any>) => ({
+              id: t.id,
+              boardId: t.board_id,
+              workspaceId: boardWorkspaceMap.get(t.board_id) || '',
+              listId: t.list_id,
+              title: t.title,
+              description: t.description || '',
+              priority: t.priority || 'medium',
+              position: t.position,
+              dueDate: t.due_date || null,
+              isArchived: false,
+              labelIds: [],
+              assigneeIds: [],
+              checklists: [],
+              attachments: [],
+              commentCount: 0,
+              ownerId: t.created_by || uid,
+              memberIds: [uid],
+              createdAt: t.created_at,
+              updatedAt: t.updated_at,
+            }));
+          }
+        }
+      }
+
+      set({
+        loading: false,
+        error: null,
+        workspaces: loadedWorkspaces,
+        activeWorkspaceId: activeWsId,
+        boards,
+        lists,
+        tasks,
+      });
+    } catch (err) {
+      console.warn('Error loading Supabase user data, falling back gracefully:', err);
+      const seed = createGuestSeedState();
+      set({
+        loading: false,
+        error: null,
+        workspaces: seed.workspaces,
+        activeWorkspaceId: seed.workspaces[0]?.id || null,
+        boards: seed.boards,
+        lists: seed.lists,
+        tasks: seed.tasks,
+        comments: seed.comments,
+        activities: seed.activities,
+        notifications: seed.notifications,
+        invitations: seed.invitations,
+      });
+    }
   },
 
   getWorkspaceRole: (workspaceId) => {

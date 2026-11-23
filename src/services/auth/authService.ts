@@ -16,6 +16,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore';
 import { auth, db, googleProvider, OperationType, handleFirestoreError } from '../firebase/config';
+import { supabase, isSupabaseConfigured } from '../supabase/client';
 import { clampString } from '../../utils/kanban';
 import { FIELD_LIMITS } from '../../constants/templates';
 import type { ThemeMode, UserProfile } from '../../types';
@@ -32,10 +33,14 @@ interface AuthResult {
 }
 
 export function formatAuthError(error: unknown): string {
-  const errObj = error as { code?: string; message?: string } | null | undefined;
+  const errObj = error as { code?: string; message?: string; error_description?: string } | null | undefined;
   const code = errObj?.code || '';
-  if (code === 'auth/popup-closed-by-user') return 'Sign-in popup was closed before completing.';
-  if (code === 'auth/popup-blocked') {
+  const message = errObj?.error_description || errObj?.message || '';
+
+  if (code === 'auth/popup-closed-by-user' || message.includes('popup-closed-by-user')) {
+    return 'Sign-in popup was closed before completing.';
+  }
+  if (code === 'auth/popup-blocked' || message.includes('popup-blocked')) {
     return 'Browser blocked the sign-in popup. Please allow popups for this site.';
   }
   if (
@@ -53,7 +58,16 @@ export function formatAuthError(error: unknown): string {
   if (code === 'auth/too-many-requests') {
     return 'Too many attempts. Please wait a moment and try again.';
   }
-  return errObj?.message || 'Authentication failed. Please try again.';
+  if (
+    message.toLowerCase().includes('provider is not enabled') ||
+    message.toLowerCase().includes('unsupported provider')
+  ) {
+    return 'Google provider is not enabled in Supabase yet. Please enable Google under Supabase Dashboard → Authentication → Providers → Google.';
+  }
+  if (message.toLowerCase().includes('oauth')) {
+    return `OAuth Error: ${message}`;
+  }
+  return message || 'Authentication failed. Please try again.';
 }
 
 export async function syncUserProfileDocs(
@@ -124,6 +138,118 @@ export async function loginWithGoogle(): Promise<AuthResult> {
   const credential = await signInWithPopup(auth, googleProvider);
   const profile = await syncUserProfileDocs(credential.user);
   return { user: credential.user, profile };
+}
+
+export const loginWithGoogleFirebase = loginWithGoogle;
+
+export async function loginWithGoogleSupabase(): Promise<void> {
+  if (!isSupabaseConfigured() || !supabase) {
+    throw new Error(
+      'Supabase is not configured. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'
+    );
+  }
+  const redirectTo = `${window.location.origin}/dashboard`;
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
+    },
+  });
+  if (error) {
+    throw error;
+  }
+}
+
+export async function syncSupabaseUserProfile(sbUser: {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown>;
+  confirmed_at?: string;
+  email_confirmed_at?: string;
+}): Promise<UserProfile> {
+  const fullName = clampString(
+    (sbUser.user_metadata?.full_name as string) ||
+      (sbUser.user_metadata?.name as string) ||
+      sbUser.email?.split('@')[0] ||
+      'TaskFlow User',
+    FIELD_LIMITS.fullName
+  );
+  const avatarUrl = clampString(
+    (sbUser.user_metadata?.avatar_url as string) ||
+      (sbUser.user_metadata?.picture as string) ||
+      '',
+    512
+  );
+  const email = clampString(sbUser.email || '', 254);
+
+  if (isSupabaseConfigured() && supabase) {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', sbUser.id)
+        .maybeSingle();
+
+      if (data) {
+        return {
+          id: data.id,
+          uid: data.id,
+          email,
+          fullName: data.full_name || fullName,
+          avatarUrl: data.avatar_url || avatarUrl,
+          bio: data.bio || '',
+          roleTitle: data.role_title || 'Member',
+          theme: 'light',
+          createdAt: data.created_at,
+          updatedAt: data.updated_at,
+        };
+      }
+
+      // If profile row doesn't exist yet, insert it
+      const { data: inserted } = await supabase
+        .from('profiles')
+        .insert({
+          id: sbUser.id,
+          full_name: fullName,
+          avatar_url: avatarUrl,
+          role_title: 'Member',
+          bio: '',
+        })
+        .select()
+        .maybeSingle();
+
+      if (inserted) {
+        return {
+          id: inserted.id,
+          uid: inserted.id,
+          email,
+          fullName: inserted.full_name || fullName,
+          avatarUrl: inserted.avatar_url || avatarUrl,
+          bio: inserted.bio || '',
+          roleTitle: inserted.role_title || 'Member',
+          theme: 'light',
+          createdAt: inserted.created_at,
+          updatedAt: inserted.updated_at,
+        };
+      }
+    } catch (e) {
+      console.warn('Error syncing Supabase user profile:', e);
+    }
+  }
+
+  return {
+    uid: sbUser.id,
+    email,
+    fullName,
+    avatarUrl,
+    bio: '',
+    roleTitle: 'Member',
+    theme: 'light',
+  };
 }
 
 export async function loginWithEmail(email: string, password: string): Promise<AuthResult> {

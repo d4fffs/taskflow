@@ -1,10 +1,12 @@
 import { create } from 'zustand';
 import { onAuthStateChanged, type Unsubscribe } from 'firebase/auth';
 import { auth } from '../services/firebase/config';
+import { supabase, isSupabaseConfigured } from '../services/supabase/client';
 import {
   syncUserProfileDocs,
   updateUserProfile,
   logoutUser,
+  syncSupabaseUserProfile,
 } from '../services/auth/authService';
 import { createGuestSeedState } from '../services/sandbox/guestSeed';
 import type { AppUser, ThemeMode, UserProfile } from '../types';
@@ -51,16 +53,23 @@ function getPreviewFlag(): boolean {
   }
 }
 
+export type AuthProviderType = 'firebase' | 'supabase' | 'guest' | null;
+
 export interface AuthState {
   user: AppUser | null;
   profile: UserProfile | null;
   authReady: boolean;
   isGuestMode: boolean;
+  authProvider: AuthProviderType;
   theme: 'light' | 'dark';
   sidebarCollapsed: boolean;
   initAuth: () => Unsubscribe;
   enterGuestMode: () => void;
-  setSession: (user: AppUser, profile: UserProfile | null) => void;
+  setSession: (
+    user: AppUser,
+    profile: UserProfile | null,
+    provider?: Exclude<AuthProviderType, 'guest' | null>
+  ) => void;
   saveProfile: (updates: Partial<UserProfile>) => Promise<void>;
   toggleTheme: () => void;
   setTheme: (next: ThemeMode) => void;
@@ -73,6 +82,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   profile: null,
   authReady: false,
   isGuestMode: false,
+  authProvider: null,
   theme: getInitialTheme(),
   sidebarCollapsed: false,
 
@@ -89,12 +99,140 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         profile: seed.profile,
         authReady: true,
         isGuestMode: true,
+        authProvider: 'guest',
       });
       return () => {};
     }
 
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubSupabase = () => {};
+
+    // 1. Supabase Auth Listener & Session Check
+    if (isSupabaseConfigured() && supabase) {
+      // Check active or returning OAuth session
+      supabase.auth.getSession().then(async ({ data: { session } }) => {
+        if (session?.user && !get().user) {
+          setPreviewFlag(false);
+          const sbUser = session.user;
+          const mappedUser: AppUser = {
+            uid: sbUser.id,
+            email: sbUser.email || null,
+            displayName:
+              (sbUser.user_metadata?.full_name as string) ||
+              (sbUser.user_metadata?.name as string) ||
+              sbUser.email?.split('@')[0] ||
+              'TaskFlow User',
+            photoURL:
+              (sbUser.user_metadata?.avatar_url as string) ||
+              (sbUser.user_metadata?.picture as string) ||
+              null,
+            emailVerified: Boolean(sbUser.confirmed_at || sbUser.email_confirmed_at),
+          };
+
+          try {
+            const profile = await syncSupabaseUserProfile(sbUser);
+            set({
+              user: mappedUser,
+              profile,
+              authReady: true,
+              isGuestMode: false,
+              authProvider: 'supabase',
+            });
+          } catch (err) {
+            console.error('Failed syncing initial Supabase profile:', err);
+            set({
+              user: mappedUser,
+              profile: {
+                uid: sbUser.id,
+                email: sbUser.email || '',
+                fullName: mappedUser.displayName || 'TaskFlow User',
+                avatarUrl: mappedUser.photoURL || '',
+                bio: '',
+                roleTitle: 'Member',
+              },
+              authReady: true,
+              isGuestMode: false,
+              authProvider: 'supabase',
+            });
+          }
+        }
+      });
+
+      // Listen to auth changes in Supabase (OAuth redirect return, sign-in, sign-out)
+      const { data: listener } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_OUT') {
+          if (get().authProvider === 'supabase') {
+            set({
+              user: null,
+              profile: null,
+              authReady: true,
+              isGuestMode: false,
+              authProvider: null,
+            });
+          }
+          return;
+        }
+
+        if (session?.user) {
+          setPreviewFlag(false);
+          const sbUser = session.user;
+          const mappedUser: AppUser = {
+            uid: sbUser.id,
+            email: sbUser.email || null,
+            displayName:
+              (sbUser.user_metadata?.full_name as string) ||
+              (sbUser.user_metadata?.name as string) ||
+              sbUser.email?.split('@')[0] ||
+              'TaskFlow User',
+            photoURL:
+              (sbUser.user_metadata?.avatar_url as string) ||
+              (sbUser.user_metadata?.picture as string) ||
+              null,
+            emailVerified: Boolean(sbUser.confirmed_at || sbUser.email_confirmed_at),
+          };
+
+          try {
+            const profile = await syncSupabaseUserProfile(sbUser);
+            set({
+              user: mappedUser,
+              profile,
+              authReady: true,
+              isGuestMode: false,
+              authProvider: 'supabase',
+            });
+          } catch (err) {
+            console.error('Failed syncing Supabase profile on state change:', err);
+            set({
+              user: mappedUser,
+              profile: {
+                uid: sbUser.id,
+                email: sbUser.email || '',
+                fullName: mappedUser.displayName || 'TaskFlow User',
+                avatarUrl: mappedUser.photoURL || '',
+                bio: '',
+                roleTitle: 'Member',
+              },
+              authReady: true,
+              isGuestMode: false,
+              authProvider: 'supabase',
+            });
+          }
+        }
+      });
+
+      unsubSupabase = () => {
+        listener?.subscription?.unsubscribe();
+      };
+    }
+
+    // 2. Firebase Auth Listener
+    const unsubFirebase = onAuthStateChanged(auth, async (firebaseUser) => {
       if (get().isGuestMode && !firebaseUser) {
+        set({ authReady: true });
+        return;
+      }
+
+      // If user is already authenticated via Supabase, do not overwrite with Firebase null
+      if (get().authProvider === 'supabase' && get().user) {
         set({ authReady: true });
         return;
       }
@@ -128,9 +266,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             profile,
             authReady: true,
             isGuestMode: false,
+            authProvider: 'firebase',
           });
         } catch (err) {
-          console.error('Failed syncing user profile:', err);
+          console.error('Failed syncing Firebase user profile:', err);
           set({
             user: mappedUser,
             profile: {
@@ -143,19 +282,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             },
             authReady: true,
             isGuestMode: false,
+            authProvider: 'firebase',
           });
         }
-      } else {
+      } else if (get().authProvider === 'firebase') {
         set({
           user: null,
           profile: null,
           authReady: true,
           isGuestMode: false,
+          authProvider: null,
         });
+      } else if (!get().user) {
+        set({ authReady: true });
       }
     });
 
-    return unsubscribe;
+    return () => {
+      unsubFirebase();
+      unsubSupabase();
+    };
   },
 
   enterGuestMode: () => {
@@ -166,16 +312,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       profile: seed.profile,
       authReady: true,
       isGuestMode: true,
+      authProvider: 'guest',
     });
   },
 
-  setSession: (user, profile) => {
+  setSession: (user, profile, provider = 'firebase') => {
     setPreviewFlag(false);
-    set({ user, profile, authReady: true, isGuestMode: false });
+    set({ user, profile, authReady: true, isGuestMode: false, authProvider: provider });
   },
 
   saveProfile: async (updates) => {
-    const { user, profile, isGuestMode } = get();
+    const { user, profile, isGuestMode, authProvider } = get();
     if (!user) return;
     const merged: UserProfile = {
       uid: user.uid,
@@ -185,8 +332,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       ...updates,
     };
     set({ profile: merged });
-    if (!isGuestMode && user.emailVerified) {
-      await updateUserProfile(user.uid, merged);
+    if (!isGuestMode) {
+      if (authProvider === 'supabase' && isSupabaseConfigured() && supabase) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({
+              full_name: merged.fullName,
+              avatar_url: merged.avatarUrl || '',
+              role_title: merged.roleTitle || '',
+              bio: merged.bio || '',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', user.uid);
+        } catch (err) {
+          console.warn('Failed to update Supabase profile:', err);
+        }
+      } else if (user.emailVerified) {
+        await updateUserProfile(user.uid, merged);
+      }
     }
   },
 
@@ -218,9 +382,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logout: async () => {
     const wasGuest = get().isGuestMode;
     setPreviewFlag(false);
-    set({ user: null, profile: null, isGuestMode: false });
+    set({ user: null, profile: null, isGuestMode: false, authProvider: null });
     if (!wasGuest) {
-      await logoutUser();
+      try {
+        if (isSupabaseConfigured() && supabase) {
+          await supabase.auth.signOut();
+        }
+      } catch (err) {
+        console.warn('Supabase sign out error:', err);
+      }
+      try {
+        await logoutUser();
+      } catch (err) {
+        console.warn('Firebase sign out error:', err);
+      }
     }
   },
 }));
